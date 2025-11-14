@@ -10,14 +10,13 @@ type GLTF = { scene: THREE.Group; nodes?: any; materials?: any };
 
 // ====== CONFIG ======
 const MODEL_URL = "/models/Mia_Muscles_OBG.glb";
-// Model rotation: [0,0,0] faces forward; flip Y to Math.PI if backwards
 const ROTATION_FIX: [number, number, number] = [0, 0, 0];
 let MODEL_SCALE = 1.2;
 const MODEL_Y_OFFSET = -0.5;
 const ROTATION_INTENSITY = 0.9;
 const VERTICAL_BOB = 0.6;
-// Pointer rotation intensity (how much model rotates from pointer X)
-const POINTER_ROT_MAX = 0.45; // radians (~25deg)
+const HOVER_POINTER_ROT_MAX = 0.45;
+const DRAG_SENSITIVITY = Math.PI * 1.4;
 // ====================
 
 type BBox = {
@@ -57,43 +56,47 @@ function useModelBBox(url: string) {
   return { gltf, bbox };
 }
 
-/**
- * ModelInstance now accepts pointerX prop (normalized -1..1)
- * pointerX influences a small additional rotation on Y axis.
- */
-function ModelInstance({ gltf, pointerX }: { gltf: GLTF; pointerX: number }) {
+function ModelInstance({
+  gltf,
+  pointerX,
+  dragRotation,
+  onApplyRotation,
+}: {
+  gltf: GLTF;
+  pointerX: number;
+  dragRotation: number;
+  onApplyRotation?: (r: number) => void;
+}) {
   const groupRef = useRef<THREE.Group | null>(null);
   const scroll = useScroll();
 
-  // smoothing refs
   const rotYRef = useRef(0);
   const rotXRef = useRef(0);
   const posYRef = useRef(MODEL_Y_OFFSET);
 
   useFrame(() => {
     if (!groupRef.current) return;
-    const t = scroll.offset; // 0..1
+    const t = scroll.offset ?? 0;
 
-    // base motion from scroll
-    const targetBaseRotY = (1 - t * ROTATION_INTENSITY) * Math.PI * 0.02; // tiny base rotation
+    const targetBaseRotY = (1 - t * ROTATION_INTENSITY) * Math.PI * 0.02;
     const targetBaseRotX = (t - 0.5) * 0.06;
     const targetY = MODEL_Y_OFFSET + (0.5 - t) * VERTICAL_BOB;
 
-    // pointer-driven additional Y rotation
-    const pointerTargetY = pointerX * POINTER_ROT_MAX; // -max..max
+    const pointerHoverY = pointerX * HOVER_POINTER_ROT_MAX;
 
-    // combine base + pointer, but keep pointer influence dominant for horizontal rotate
-    const targetCombinedY = targetBaseRotY + pointerTargetY;
+    const targetCombinedY = targetBaseRotY + pointerHoverY + dragRotation;
 
-    // smooth lerp
     rotYRef.current += (targetCombinedY - rotYRef.current) * 0.12;
     rotXRef.current += (targetBaseRotX - rotXRef.current) * 0.06;
     posYRef.current += (targetY - posYRef.current) * 0.08;
 
-    // apply
     groupRef.current.rotation.y = ROTATION_FIX[1] + rotYRef.current;
     groupRef.current.rotation.x = ROTATION_FIX[0] + rotXRef.current;
     groupRef.current.position.y = posYRef.current;
+
+    if (onApplyRotation) {
+      onApplyRotation(groupRef.current.rotation.y);
+    }
   });
 
   return (
@@ -103,10 +106,6 @@ function ModelInstance({ gltf, pointerX }: { gltf: GLTF; pointerX: number }) {
   );
 }
 
-/**
- * CameraRig: keep behavior from before (no zoom on Z), camera vertical + lookAt changes
- * unchanged here (we pass sectionTargets computed from bbox).
- */
 function CameraRig({ sectionTargets }: { sectionTargets: { camY: number; camZ: number; lookAt: THREE.Vector3 }[] | null }) {
   const { camera } = useThree();
   const dreiScroll = useScroll();
@@ -176,7 +175,6 @@ function CameraRig({ sectionTargets }: { sectionTargets: { camY: number; camZ: n
   return null;
 }
 
-/** Overlay: show drei.offset and window norm for debugging */
 function ScrollOverlay() {
   const dreiScroll = useScroll();
   const [dreiVal, setDreiVal] = useState(0);
@@ -199,13 +197,21 @@ function ScrollOverlay() {
       <div style={{ position: "fixed", left: 12, top: 12, padding: "8px 10px", background: "rgba(0,0,0,0.65)", color: "white", borderRadius: 8, fontSize: 13, zIndex: 9999 }}>
         <div>drei.offset: <strong>{dreiVal}</strong></div>
         <div>window.norm: <strong>{winVal}</strong></div>
-        <div style={{ marginTop: 6, fontSize: 11, opacity: 0.8 }}>Move cursor left/right to rotate model.</div>
+        <div style={{ marginTop: 6, fontSize: 11, opacity: 0.8 }}>Move cursor left/right to rotate model. Click-drag or touch-drag for 360° control.</div>
       </div>
     </Html>
   );
 }
 
-function SceneWithAutoTargets({ pointerX }: { pointerX: number }) {
+function SceneWithAutoTargets({
+  pointerX,
+  dragRotation,
+  onApplyRotation,
+}: {
+  pointerX: number;
+  dragRotation: number;
+  onApplyRotation?: (r: number) => void;
+}) {
   const { gltf, bbox } = useModelBBox(MODEL_URL);
 
   const sectionTargets = useMemo(() => {
@@ -241,7 +247,14 @@ function SceneWithAutoTargets({ pointerX }: { pointerX: number }) {
       <ambientLight intensity={0.95} />
       <directionalLight position={[10, 10, 10]} intensity={1.0} />
       <Suspense fallback={<Html center>Loading 3D model...</Html>}>
-        {gltf && <ModelInstance gltf={gltf} pointerX={pointerX} />}
+        {gltf && (
+          <ModelInstance
+            gltf={gltf}
+            pointerX={pointerX}
+            dragRotation={dragRotation}
+            onApplyRotation={onApplyRotation}
+          />
+        )}
       </Suspense>
 
       <CameraRig sectionTargets={sectionTargets} />
@@ -251,37 +264,181 @@ function SceneWithAutoTargets({ pointerX }: { pointerX: number }) {
   );
 }
 
-export default function Page() {
-  // pointerX normalized -1..1 (left..right)
-  const [pointerX, setPointerX] = useState(0);
+function RotateBadge({ dragRotation, appliedRotation, pointerX }: { dragRotation: number; appliedRotation: number; pointerX: number }) {
+  const degRaw = (dragRotation * 180) / Math.PI;
+  const degApplied = (appliedRotation * 180) / Math.PI;
+  const degAppliedNorm = ((Math.round(degApplied) % 360) + 360) % 360;
+  const turnsRaw = Math.round((dragRotation / (Math.PI * 2)) * 100) / 100;
+  const turnsApplied = Math.round((appliedRotation / (Math.PI * 2)) * 100) / 100;
+  const radRaw = Math.round(dragRotation * 100) / 100;
+  const radApplied = Math.round(appliedRotation * 100) / 100;
 
-  // handlers: update pointerX from mouse / touch
+  return (
+    <div
+      className="fixed bottom-20 right-6 z-20 text-sm text-white/80"
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        padding: "6px 10px",
+        borderRadius: 8,
+        minWidth: 180,
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontWeight: 700 }}>{degAppliedNorm}°</div>
+      <div style={{ fontSize: 11, opacity: 0.9 }}>applied turns: {turnsApplied}</div>
+      <div style={{ fontSize: 11, opacity: 0.9 }}>raw turns: {turnsRaw}</div>
+      <div style={{ fontSize: 11, opacity: 0.9 }}>raw rad: {radRaw} · applied rad: {radApplied}</div>
+      <div style={{ fontSize: 10, opacity: 0.75, marginTop: 4 }}>hover: {pointerX.toFixed(2)}</div>
+    </div>
+  );
+}
+
+function ScrollBadge() {
+  const [scrolled, setScrolled] = useState(0); // 0..1
+
   useEffect(() => {
-    const handleMouse = (e: MouseEvent) => {
+    let rafId: number | null = null;
+
+    const update = () => {
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      const docH = document.documentElement.scrollHeight || document.body.scrollHeight || 1;
+      const winH = window.innerHeight || 1;
+      const maxScroll = Math.max(1, docH - winH);
+      const norm = Math.min(Math.max(scrollY / maxScroll, 0), 1);
+      setScrolled(norm);
+      rafId = null;
+    };
+
+    const onScroll = () => {
+      if (rafId == null) rafId = requestAnimationFrame(update);
+    };
+
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (rafId != null) cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  return (
+    <div
+      className="fixed bottom-6 right-6 z-20 text-sm text-white/80"
+      style={{
+        background: "rgba(0,0,0,0.55)",
+        padding: "6px 10px",
+        borderRadius: 8,
+        minWidth: 110,
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>{Math.round(scrolled * 100)}%</div>
+      <div style={{ fontSize: 11, opacity: 0.85 }}>scrolled</div>
+    </div>
+  );
+}
+
+export default function Page() {
+  const [pointerX, setPointerX] = useState(0);
+  const [dragRotation, setDragRotation] = useState(0);
+  const [appliedRotation, setAppliedRotation] = useState(0);
+  const draggingRef = useRef(false);
+  const lastXRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
       const x = e.clientX;
       const w = window.innerWidth || 1;
-      const nx = Math.min(Math.max((x / w) * 2 - 1, -1), 1); // -1..1
+      const nx = Math.min(Math.max((x / w) * 2 - 1, -1), 1);
       setPointerX(nx);
+
+      if (draggingRef.current && lastXRef.current !== null) {
+        const dx = (x - lastXRef.current) / w;
+        lastXRef.current = x;
+        setDragRotation((r) => r + dx * DRAG_SENSITIVITY);
+      }
     };
-    const handleTouch = (e: TouchEvent) => {
+
+    const handleTouchMoveHover = (e: TouchEvent) => {
       if (!e.touches || e.touches.length === 0) return;
       const x = e.touches[0].clientX;
       const w = window.innerWidth || 1;
       const nx = Math.min(Math.max((x / w) * 2 - 1, -1), 1);
       setPointerX(nx);
+
+      if (draggingRef.current && lastXRef.current !== null) {
+        const dx = (x - lastXRef.current) / w;
+        lastXRef.current = x;
+        setDragRotation((r) => r + dx * DRAG_SENSITIVITY);
+      }
     };
 
-    window.addEventListener("mousemove", handleMouse);
-    window.addEventListener("touchmove", handleTouch, { passive: true });
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("touchmove", handleTouchMoveHover, { passive: true });
 
     return () => {
-      window.removeEventListener("mousemove", handleMouse);
-      window.removeEventListener("touchmove", handleTouch);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("touchmove", handleTouchMoveHover);
     };
   }, []);
 
   useEffect(() => {
-    // dev helper: ensure page scrollable
+    const onPointerDown = (e: PointerEvent) => {
+      draggingRef.current = true;
+      lastXRef.current = e.clientX;
+      (e.target as Element)?.setPointerCapture?.(e.pointerId);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const x = e.clientX;
+      const w = window.innerWidth || 1;
+      if (lastXRef.current === null) lastXRef.current = x;
+      const dx = (x - lastXRef.current) / w;
+      lastXRef.current = x;
+      setDragRotation((r) => r + dx * DRAG_SENSITIVITY);
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      draggingRef.current = false;
+      lastXRef.current = null;
+      try {
+        (e.target as Element)?.releasePointerCapture?.(e.pointerId);
+      } catch {}
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (!e.touches || e.touches.length === 0) return;
+      draggingRef.current = true;
+      lastXRef.current = e.touches[0].clientX;
+    };
+    const onTouchEnd = () => {
+      draggingRef.current = false;
+      lastXRef.current = null;
+    };
+
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchend", onTouchEnd);
+
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchend", onTouchEnd);
+    };
+  }, []);
+
+  useEffect(() => {
     const sh = document.documentElement.scrollHeight;
     const wh = window.innerHeight;
     if (sh <= wh) {
@@ -292,11 +449,14 @@ export default function Page() {
   return (
     <div className="min-h-screen relative">
       <div className="fixed inset-0 z-0">
-        {/* camera z closer (4) to make model look nearer */}
         <Canvas camera={{ position: [0, 1.6, 4], fov: 50 }} className="w-full h-full">
           <Suspense fallback={<Html center>Loading 3D...</Html>}>
             <ScrollControls pages={4} damping={8}>
-              <SceneWithAutoTargets pointerX={pointerX} />
+              <SceneWithAutoTargets
+                pointerX={pointerX}
+                dragRotation={dragRotation}
+                onApplyRotation={(r: number) => setAppliedRotation(r)}
+              />
             </ScrollControls>
           </Suspense>
         </Canvas>
@@ -305,7 +465,7 @@ export default function Page() {
       <main className="relative z-10 text-white" style={{ touchAction: "pan-y" }}>
         <header className="p-6">
           <h1 className="text-2xl font-semibold">3D Anatomy — Interactive Rotate</h1>
-          <p className="text-sm text-white/80">Move cursor left/right or swipe to rotate the model subtly.</p>
+          <p className="text-sm text-white/80">Move cursor left/right, click-drag or swipe to rotate the model freely (360°).</p>
         </header>
 
         <section className="h-screen flex items-center justify-center">
@@ -339,7 +499,8 @@ export default function Page() {
         <div className="h-40" />
       </main>
 
-      <div className="fixed bottom-6 right-6 z-20 text-sm text-white/80">Built with Three.js + R3F</div>
+      <ScrollBadge />
+      <RotateBadge dragRotation={dragRotation} appliedRotation={appliedRotation} pointerX={pointerX} />
     </div>
   );
 }
