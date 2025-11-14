@@ -341,12 +341,27 @@ function ScrollBadge() {
   );
 }
 
+
+
 export default function Page() {
   const [pointerX, setPointerX] = useState(0);
   const [dragRotation, setDragRotation] = useState(0);
   const [appliedRotation, setAppliedRotation] = useState(0);
   const draggingRef = useRef(false);
   const lastXRef = useRef<number | null>(null);
+  // per-card hide progress values: 0 (visible) -> 1 (hidden)
+  const [headHideProgress, setHeadHideProgress] = useState(0);
+  const [torsoHideProgress, setTorsoHideProgress] = useState(0);
+  const [armsHideProgress, setArmsHideProgress] = useState(0);
+  const [legsHideProgress, setLegsHideProgress] = useState(0);
+  const torsoRef = useRef<HTMLElement | null>(null);
+
+  const sections = [
+    { title: "🧠 Head & Brain", description: "Fokus pada area dekat bagian atas model, meliputi kranium dan sistem saraf pusat." },
+    { title: "🫁 Torso & Organs", description: "Fokus pada area batang tubuh, meliputi organ vital seperti jantung, paru-paru, dan sistem pencernaan." },
+    { title: "💪 Arms & Limbs", description: "Fokus pada anggota gerak atas (lengan dan tangan) dan anggota gerak umum." },
+    { title: "🦵 Legs & Feet", description: "Fokus pada anggota gerak bawah, meliputi tulang panggul, kaki, dan telapak kaki." },
+  ];
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -446,6 +461,56 @@ export default function Page() {
     }
   }, []);
 
+  // Update headHideProgress based on page scroll normalized value
+  // We want hiding to start at 10% and finish at 15% scroll.
+  useEffect(() => {
+    let rafId: number | null = null;
+
+    const updateProgress = () => {
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      const docH = document.documentElement.scrollHeight || document.body.scrollHeight || 1;
+      const winH = window.innerHeight || 1;
+      const maxScroll = Math.max(1, docH - winH);
+      const norm = Math.min(Math.max(scrollY / maxScroll, 0), 1);
+
+      // thresholds for each card (global normalized scroll positions)
+      const thresholds: [number, number][] = [
+        [0.10, 0.15], // Head
+        [0.35, 0.45], // Torso
+        [0.60, 0.70], // Arms
+        [0.80, 1.00], // Legs: will appear between 80% -> 100%
+      ];
+
+      const calc = (s: number, e: number) => {
+        if (norm <= s) return 0;
+        if (norm >= e) return 1;
+        return (norm - s) / (e - s);
+      };
+
+      setHeadHideProgress(calc(thresholds[0][0], thresholds[0][1]));
+      setTorsoHideProgress(calc(thresholds[1][0], thresholds[1][1]));
+      setArmsHideProgress(calc(thresholds[2][0], thresholds[2][1]));
+      // Legs should be hidden until ~80% and then fade in toward 100%.
+      // calc() returns 0 before start and 1 after end; invert it for legs.
+      setLegsHideProgress(1 - calc(thresholds[3][0], thresholds[3][1]));
+      rafId = null;
+    };
+
+    const onScrollOrResize = () => {
+      if (rafId == null) rafId = requestAnimationFrame(updateProgress);
+    };
+
+    onScrollOrResize();
+    window.addEventListener("scroll", onScrollOrResize, { passive: true });
+    window.addEventListener("resize", onScrollOrResize);
+
+    return () => {
+      window.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+      if (rafId != null) cancelAnimationFrame(rafId);
+    };
+  }, []);
+
   return (
     <div className="min-h-screen relative">
       <div className="fixed inset-0 z-0">
@@ -464,36 +529,156 @@ export default function Page() {
 
       <main className="relative z-10 text-white" style={{ touchAction: "pan-y" }}>
         <header className="p-6">
-          <h1 className="text-2xl font-semibold">3D Anatomy — Interactive Rotate</h1>
+          <h1 className="text-2xl font-semibold">3D Anatomy</h1>
           <p className="text-sm text-white/80">Move cursor left/right, click-drag or swipe to rotate the model freely (360°).</p>
         </header>
 
-        <section className="h-screen flex items-center justify-center">
-          <div className="max-w-2xl p-8 bg-black/40 rounded-lg">
-            <h2 className="text-xl font-bold">Head & Brain</h2>
-            <p className="mt-2 text-sm">This should focus near the top of the model.</p>
-          </div>
+         <section className="h-screen flex items-center justify-center pl-6 md:pl-12">
+          {
+            (() => {
+              const p = Math.min(Math.max(headHideProgress, 0), 1);
+              const opacity = 1 - p;
+              const translateY = -12 * p;
+              const scale = 1 - 0.005 * p;
+              const pointerEvents = p >= 0.999 ? 'none' : 'auto';
+              const style: React.CSSProperties = {
+                opacity,
+                transform: `translateY(${translateY}px) scale(${scale})`,
+                pointerEvents: pointerEvents as any,
+              };
+
+              return (
+                <div className="w-full max-w-2xl px-6 py-8 bg-linear-to-br from-white/3 via-white/2 to-white/1 border border-white/10 shadow-xl backdrop-blur-md rounded-2xl transform hover:scale-[1.02] card-base" style={style}>
+                  <div className="flex items-start gap-4">
+                    <div className="shrink-0">
+                      <div className="h-14 w-14 rounded-xl bg-linear-to-tr from-indigo-500 to-pink-500 flex items-center justify-center text-white text-xl">🦵</div>
+                    </div>
+
+                    <div className="flex-1">
+                      <h2 className="text-2xl font-semibold text-white">Head & Brain</h2>
+                      <p className="mt-2 text-sm text-white/80">This should focus near the top of the model.</p>
+
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <a className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-500 transition" href="#">Explore</a>
+                        <a className="inline-flex items-center px-4 py-2 border border-white/10 text-white/90 rounded-md text-sm hover:bg-white/5 transition" href="#">Learn more</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          }
+        </section>
+
+        <section ref={torsoRef} className="h-screen flex items-center justify-center">
+          {
+            (() => {
+              const p = Math.min(Math.max(torsoHideProgress, 0), 1);
+              const opacity = 1 - p;
+              const translateY = -12 * p;
+              const scale = 1 - 0.005 * p;
+              const pointerEvents = p >= 0.999 ? 'none' : 'auto';
+              const style: React.CSSProperties = {
+                opacity,
+                transform: `translateY(${translateY}px) scale(${scale})`,
+                pointerEvents: pointerEvents as any,
+              };
+
+              return (
+                <div className="w-full max-w-2xl px-6 py-8 bg-linear-to-br from-white/3 via-white/2 to-white/1 border border-white/10 shadow-xl backdrop-blur-md rounded-2xl transform hover:scale-[1.02] card-base" style={style}>
+                  <div className="flex items-start gap-4">
+                    <div className="shrink-0">
+                      <div className="h-14 w-14 rounded-xl bg-linear-to-tr from-indigo-500 to-pink-500 flex items-center justify-center text-white text-xl">🦵</div>
+                    </div>
+
+                    <div className="flex-1">
+                      <h2 className="text-2xl font-semibold text-white">Torso & Organs</h2>
+                      <p className="mt-2 text-sm text-white/80">Torso Area.</p>
+
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <a className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-500 transition" href="#">Explore</a>
+                        <a className="inline-flex items-center px-4 py-2 border border-white/10 text-white/90 rounded-md text-sm hover:bg-white/5 transition" href="#">Learn more</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          }
         </section>
 
         <section className="h-screen flex items-center justify-center">
-          <div className="max-w-2xl p-8 bg-black/40 rounded-lg">
-            <h2 className="text-xl font-bold">Torso & Organs</h2>
-            <p className="mt-2 text-sm">Torso area.</p>
-          </div>
+          {
+            (() => {
+              const p = Math.min(Math.max(armsHideProgress, 0), 1);
+              const opacity = 1 - p;
+              const translateY = -12 * p;
+              const scale = 1 - 0.005 * p;
+              const pointerEvents = p >= 0.999 ? 'none' : 'auto';
+              const style: React.CSSProperties = {
+                opacity,
+                transform: `translateY(${translateY}px) scale(${scale})`,
+                pointerEvents: pointerEvents as any,
+              };
+
+              return (
+                <div className="w-full max-w-2xl px-6 py-8 bg-linear-to-br from-white/3 via-white/2 to-white/1 border border-white/10 shadow-xl backdrop-blur-md rounded-2xl transform hover:scale-[1.02] card-base" style={style}>
+                  <div className="flex items-start gap-4">
+                    <div className="shrink-0">
+                      <div className="h-14 w-14 rounded-xl bg-linear-to-tr from-indigo-500 to-pink-500 flex items-center justify-center text-white text-xl">🦵</div>
+                    </div>
+
+                    <div className="flex-1">
+                      <h2 className="text-2xl font-semibold text-white">Arms & Limbs</h2>
+                      <p className="mt-2 text-sm text-white/80">Upper / lower limbs.</p>
+
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <a className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-500 transition" href="#">Explore</a>
+                        <a className="inline-flex items-center px-4 py-2 border border-white/10 text-white/90 rounded-md text-sm hover:bg-white/5 transition" href="#">Learn more</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          }
         </section>
 
         <section className="h-screen flex items-center justify-center">
-          <div className="max-w-2xl p-8 bg-black/40 rounded-lg">
-            <h2 className="text-xl font-bold">Arms & Limbs</h2>
-            <p className="mt-2 text-sm">Upper / lower limbs.</p>
-          </div>
-        </section>
+          {
+            (() => {
+              const p = Math.min(Math.max(legsHideProgress, 0), 1);
+              const opacity = 1 - p;
+              const translateY = -12 * p;
+              const scale = 1 - 0.005 * p;
+              const pointerEvents = p >= 0.999 ? 'none' : 'auto';
+              const style: React.CSSProperties = {
+                opacity,
+                transform: `translateY(${translateY}px) scale(${scale})`,
+                pointerEvents: pointerEvents as any,
+              };
 
-        <section className="h-screen flex items-center justify-center">
-          <div className="max-w-2xl p-8 bg-black/40 rounded-lg">
-            <h2 className="text-xl font-bold">Legs & Feet</h2>
-            <p className="mt-2 text-sm">Lower limbs focus.</p>
-          </div>
+              return (
+                <div className="w-full max-w-2xl px-6 py-8 bg-linear-to-br from-white/3 via-white/2 to-white/1 border border-white/10 shadow-xl backdrop-blur-md rounded-2xl transform hover:scale-[1.02] card-base" style={style}>
+                  <div className="flex items-start gap-4">
+                    <div className="shrink-0">
+                      <div className="h-14 w-14 rounded-xl bg-linear-to-tr from-indigo-500 to-pink-500 flex items-center justify-center text-white text-xl">🦵</div>
+                    </div>
+
+                    <div className="flex-1">
+                      <h2 className="text-2xl font-semibold text-white">Legs & Feet</h2>
+                      <p className="mt-2 text-sm text-white/80">Lower limbs focus.</p>
+
+                      <div className="mt-4 flex flex-wrap gap-3">
+                        <a className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md text-sm hover:bg-indigo-500 transition" href="#">Explore</a>
+                        <a className="inline-flex items-center px-4 py-2 border border-white/10 text-white/90 rounded-md text-sm hover:bg-white/5 transition" href="#">Learn more</a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          }
         </section>
 
         <div className="h-40" />
